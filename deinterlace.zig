@@ -41,25 +41,10 @@ pub fn saveAudio(filename: []const u8, audio: Audio) !void {
 pub fn main() !u8 {
     const all_args = try std.process.argsAlloc(std.heap.page_allocator);
     if (all_args.len <= 1) {
-        std.debug.print("Deinterlace: interlacer d FILE.wav\n", .{});
-        std.debug.print("Interlace  : interlacer i FILE.wav\n", .{});
+        std.debug.print("Usage: deinterlace FILE.wav\n", .{});
         return @as(u8, 1);
     }
-
-    const cmd = all_args[1];
-    const args = all_args[2..];
-
-    if (std.mem.eql(u8, cmd, "i")) {
-        std.log.err("interlace not implemented", .{});
-        return 1;
-    }
-
-    if (std.mem.eql(u8, cmd, "d")) {
-        return deinterlace(args);
-    }
-
-    std.log.err("unknown command '{s}', expected 'i' or 'd'", .{cmd});
-    return @as(u8, 1);
+    return deinterlace(all_args[1..]);
 }
 
 fn deinterlace(args: [][]const u8) !u8 {
