@@ -41,13 +41,28 @@ pub fn saveAudio(filename: []const u8, audio: Audio) !void {
 pub fn main() !u8 {
     const all_args = try std.process.argsAlloc(std.heap.page_allocator);
     if (all_args.len <= 1) {
-        std.debug.print("Usage: deinterlace FILE.wav\n", .{});
+        std.debug.print("Usage: deinterlace [--drop-extra] FILE.wav\n", .{});
         return @as(u8, 1);
     }
-    return deinterlace(all_args[1..]);
+    var args = all_args[1..];
+    var drop_extra = false;
+
+    {
+        var new_arg_count: usize = 0;
+        defer args = args[0..new_arg_count];
+        for (args) |arg| {
+            if (std.mem.eql(u8, arg, "--drop-extra")) {
+                drop_extra = true;
+            } else {
+                args[new_arg_count] = arg;
+                new_arg_count += 1;
+            }
+        }
+    }
+    return deinterlace(args, .{ .drop_extra = drop_extra });
 }
 
-fn deinterlace(args: [][]const u8) !u8 {
+fn deinterlace(args: [][]const u8, opt: struct { drop_extra: bool }) !u8 {
     if (args.len != 1) {
         std.debug.print("Error: expected a wav FILE but got {} args\n", .{args.len});
         return @as(u8, 1);
@@ -82,9 +97,14 @@ fn deinterlace(args: [][]const u8) !u8 {
 
     // ensure the sample count is divisible by the interlace size
     const chunk_count = combined_sample_count / interlace_sample_count;
-    if (chunk_count * interlace_sample_count != combined_sample_count) {
-        std.log.err("quad channel sample count {} is not divisible by the interlace size {}", .{ combined_sample_count, interlace_sample_count });
-        return 1;
+    const truncated_sample_count = chunk_count * interlace_sample_count;
+    if (truncated_sample_count != combined_sample_count) {
+        const prefix: []const u8 = if (opt.drop_extra) "warning" else "error";
+        std.debug.print("{s}: quad channel sample count {} is not divisible by the interlace size {}, there are {} extra samples\n", .{ prefix, combined_sample_count, interlace_sample_count, combined_sample_count - truncated_sample_count });
+        if (!opt.drop_extra) {
+            std.debug.print("use '--drop-extra' to deinterlace anyway\n", .{});
+            return 1;
+        }
     }
     if (audio.info.format != .signed16_lsb) {
         std.log.err("expected format {} but got {}\n", .{ wav.Format.signed16_lsb, audio.info.format });
@@ -100,7 +120,6 @@ fn renderFrontBack(basename: []const u8, audio: Audio, combined_sample_count: us
     const sample_size = 2;
     const fnt_buf = try std.heap.page_allocator.alignedAlloc(u8, 2, combined_sample_count * stereo_count * sample_size);
     const bck_buf = try std.heap.page_allocator.alignedAlloc(u8, 2, combined_sample_count * stereo_count * sample_size);
-
 
     {
         const interlaced = @ptrCast([*]u16, audio.buffer.ptr)[0 .. audio.info.num_samples * audio.info.num_channels];
@@ -125,8 +144,16 @@ fn renderFrontBack(basename: []const u8, audio: Audio, combined_sample_count: us
                 write_offset += 2;
                 interlaced_offset += 2;
             }
+
+            // uncomment this to add spikes at each chunk start, useful
+            // for finding the interlace value
+            //fnt[write_offset - interlace_sample_count * 2] = 0x7fff;
+
             interlaced_offset += interlace_sample_count * audio.info.num_channels;
         }
+
+        std.mem.set(u16, fnt[write_offset..], 0);
+        std.mem.set(u16, bck[write_offset..], 0);
     }
 
     const stereo_audio_info = wav.PreloadedInfo{
