@@ -1,6 +1,8 @@
 const std = @import("std");
 const wav = @import("wav.zig");
 
+const interlace_sample_count = 33280;
+
 const Audio = struct {
     info: wav.PreloadedInfo,
     buffer: []align(2) u8,
@@ -63,14 +65,14 @@ pub fn main() !u8 {
 fn deinterlace(args: [][]const u8) !u8 {
     if (args.len != 1) {
         std.debug.print("Error: expected a wav FILE but got {} args\n", .{args.len});
-        return 1;
+        return @as(u8, 1);
     }
     const filename = args[0];
     const basename = blk: {
         if (std.mem.endsWith(u8, filename, ".wav"))
             break :blk filename[0 .. filename.len - 4];
         std.log.err("filename did not end with '.wav'", .{});
-        return 1;
+        return @as(u8, 1);
     };
 
     const audio = blk: {
@@ -87,18 +89,16 @@ fn deinterlace(args: [][]const u8) !u8 {
     //    try saveAudio(out_filename, audio);
     //}
 
-    const interlace_sample_count = 33280;
-
-    const quad_sample_count = audio.info.num_samples / 2;
-    if (quad_sample_count * 2 != audio.info.num_samples) {
+    const combined_sample_count = audio.info.num_samples / 2;
+    if (combined_sample_count * 2 != audio.info.num_samples) {
         std.log.err("sample count {} is not divisible by 2!\n", .{audio.info.num_samples});
         return 1;
     }
 
     // ensure the sample count is divisible by the interlace size
-    const chunk_count = quad_sample_count / interlace_sample_count;
-    if (chunk_count * interlace_sample_count != quad_sample_count) {
-        std.log.err("quad channel sample count {} is not divisible by the interlace size {}", .{ quad_sample_count, interlace_sample_count });
+    const chunk_count = combined_sample_count / interlace_sample_count;
+    if (chunk_count * interlace_sample_count != combined_sample_count) {
+        std.log.err("quad channel sample count {} is not divisible by the interlace size {}", .{ combined_sample_count, interlace_sample_count });
         return 1;
     }
     if (audio.info.format != .signed16_lsb) {
@@ -107,14 +107,72 @@ fn deinterlace(args: [][]const u8) !u8 {
     }
 
     std.log.info("chunk count {}", .{chunk_count});
+    return renderFrontBack(basename, audio, combined_sample_count, chunk_count);
+}
 
-    const quad_channel_count = 4;
+fn renderFrontBack(basename: []const u8, audio: Audio, combined_sample_count: usize, chunk_count: usize) !u8 {
+    const stereo_count = 2;
     const sample_size = 2;
-    const quad_buf = try std.heap.page_allocator.alignedAlloc(u8, 2, quad_sample_count * quad_channel_count * sample_size);
+    const fnt_buf = try std.heap.page_allocator.alignedAlloc(u8, 2, combined_sample_count * stereo_count * sample_size);
+    const bck_buf = try std.heap.page_allocator.alignedAlloc(u8, 2, combined_sample_count * stereo_count * sample_size);
+
 
     {
         const interlaced = @ptrCast([*]u16, audio.buffer.ptr)[0 .. audio.info.num_samples * audio.info.num_channels];
-        const quad = @ptrCast([*]u16, quad_buf.ptr)[0 .. quad_sample_count * quad_channel_count];
+        const fnt = @ptrCast([*]u16, fnt_buf.ptr)[0 .. combined_sample_count * stereo_count];
+        const bck = @ptrCast([*]u16, bck_buf.ptr)[0 .. combined_sample_count * stereo_count];
+        std.debug.assert(interlaced.len == fnt.len + bck.len);
+
+        var chunk: usize = 0;
+        var write_offset: usize = 0;
+        var interlaced_offset: usize = 0;
+
+        const interlace_2nd_offset = interlace_sample_count * audio.info.num_channels;
+
+        while (chunk < chunk_count) : (chunk += 1) {
+            //std.log.info("writing chunk {}", .{chunk});
+            var i: usize = 0;
+            while (i < interlace_sample_count) : (i += 1) {
+                fnt[write_offset + 0] = interlaced[interlaced_offset + 0];
+                fnt[write_offset + 1] = interlaced[interlaced_offset + 1];
+                bck[write_offset + 0] = interlaced[interlaced_offset + interlace_2nd_offset + 0];
+                bck[write_offset + 1] = interlaced[interlaced_offset + interlace_2nd_offset + 1];
+                write_offset += 2;
+                interlaced_offset += 2;
+            }
+            interlaced_offset += interlace_sample_count * audio.info.num_channels;
+        }
+    }
+
+    const stereo_audio_info = wav.PreloadedInfo{
+        .num_channels = stereo_count,
+        .sample_rate = audio.info.sample_rate,
+        .format = audio.info.format,
+        .num_samples = combined_sample_count,
+    };
+
+    {
+        const out_filename = try std.mem.concat(std.heap.page_allocator, u8, &[_][]const u8{ basename, "_fnt.wav" });
+        defer std.heap.page_allocator.free(out_filename);
+        try saveAudio(out_filename, .{ .info = stereo_audio_info, .buffer = fnt_buf });
+    }
+    {
+        const out_filename = try std.mem.concat(std.heap.page_allocator, u8, &[_][]const u8{ basename, "_bck.wav" });
+        defer std.heap.page_allocator.free(out_filename);
+        try saveAudio(out_filename, .{ .info = stereo_audio_info, .buffer = bck_buf });
+    }
+
+    return 0;
+}
+
+fn renderQuad() void {
+    const quad_channel_count = 4;
+    const sample_size = 2;
+    const quad_buf = try std.heap.page_allocator.alignedAlloc(u8, 2, combined_sample_count * quad_channel_count * sample_size);
+
+    {
+        const interlaced = @ptrCast([*]u16, audio.buffer.ptr)[0 .. audio.info.num_samples * audio.info.num_channels];
+        const quad = @ptrCast([*]u16, quad_buf.ptr)[0 .. combined_sample_count * quad_channel_count];
         std.debug.assert(interlaced.len == quad.len);
 
         var chunk: usize = 0;
@@ -142,7 +200,7 @@ fn deinterlace(args: [][]const u8) !u8 {
         .num_channels = quad_channel_count,
         .sample_rate = audio.info.sample_rate,
         .format = audio.info.format,
-        .num_samples = quad_sample_count,
+        .num_samples = combined_sample_count,
     };
 
     {
