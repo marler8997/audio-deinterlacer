@@ -177,7 +177,7 @@ fn renderFrontBack(basename: []const u8, audio: Audio, combined_sample_count: us
     return 0;
 }
 
-fn renderQuad() void {
+fn renderQuad(basename: []const u8, audio: Audio, combined_sample_count: usize, chunk_count: usize) void {
     const quad_channel_count = 4;
     const sample_size = 2;
     const quad_buf = try std.heap.page_allocator.alignedAlloc(u8, 2, combined_sample_count * quad_channel_count * sample_size);

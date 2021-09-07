@@ -7,7 +7,7 @@ pub fn build(b: *std.build.Builder) void {
     const exe = b.addExecutable("deinterlace", "deinterlace.zig");
     exe.setTarget(target);
     exe.setBuildMode(mode);
-    exe.override_dest_dir = .{ .Custom = "" };
+    exe.override_dest_dir = .{ .custom = "" };
     exe.install();
 
 
